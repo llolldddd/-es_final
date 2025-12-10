@@ -303,7 +303,6 @@ Processing 서버를 실행하여 시리얼과 HTTP 서버가 정상 동작하�
 ---
 
 ## 🎥 시연 영상 (YouTube Demo)
-아래 링크에 실제 시연 영상 업로드 후 주소만 바꿔 넣으면 됩니다.
 
 https://youtu.be/4QHldONTP5U?si=ZSPAZ87JWnnMseJX
 
