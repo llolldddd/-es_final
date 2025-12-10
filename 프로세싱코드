@@ -1,0 +1,152 @@
+import processing.serial.*;
+import processing.net.*;
+
+// 아두이노 시리얼 포트
+Serial arduino;
+
+// HTTP 서버
+Server server;
+
+// 냉장고 상태 변수
+int door = 0;     // 0=닫힘, 1=열림
+float temp = 0;   // 온도
+float hum = 0;    // 습도
+
+void setup() {
+  size(400, 200);
+  background(0);
+  fill(255);
+
+  // 포트 목록 출력
+  println("=== 사용 가능한 포트 목록 ===");
+  println(Serial.list());
+
+  // 🔧 아두이노 포트 번호 선택!
+  arduino = new Serial(this, Serial.list()[2], 9600);
+  arduino.bufferUntil('\n');
+
+  // 8080 포트 서버 시작
+  server = new Server(this, 8080);
+
+  println("Processing 서버 시작됨 → http://localhost:8080");
+}
+
+void draw() {
+  background(0);
+  fill(255);
+
+  textSize(18);
+  text("Smart Refrigerator Server", 20, 30);
+
+  textSize(14);
+  text("Door : " + (door == 1 ? "OPEN" : "CLOSED"), 20, 70);
+  text("Temp : " + temp + " °C", 20, 100);
+  text("Hum  : " + hum + " %", 20, 130);
+
+  // 앱 요청 대기
+  Client c = server.available();
+  if (c != null) {
+    handleRequest(c);
+  }
+}
+
+// ---------------------
+//  아두이노 → 프로세싱 데이터 수신
+// ---------------------
+void serialEvent(Serial p) {
+  String line = p.readStringUntil('\n');
+  if (line == null) return;
+
+  line = trim(line);
+  println("Arduino → " + line);
+
+  // 데이터 형식: STATE,1,5.20,60.5
+  if (line.startsWith("STATE")) {
+    String[] part = split(line, ',');
+
+    if (part.length >= 4) {
+      door = int(part[1]);
+      temp = float(part[2]);
+      hum  = float(part[3]);
+    }
+  }
+}
+
+// ---------------------
+//  HTTP GET 요청 처리
+// ---------------------
+void handleRequest(Client c) {
+  String req = c.readString();
+  if (req == null) {
+    c.stop();
+    return;
+  }
+
+  println("HTTP Request:\n" + req);
+
+  String[] lines = split(req, "\r\n");
+  if (lines.length == 0) return;
+
+  String firstLine = lines[0];
+  String[] parts = split(firstLine, ' ');
+  if (parts.length < 2) return;
+
+  String path = parts[1];
+
+  // -----------------------------
+  //  📌 상태 요청 (/state)
+  //  CSV 형태로 응답 → App Inventor에서 split으로 쉽게 처리
+  // -----------------------------
+  if (path.equals("/state")) {
+
+    String csv =
+      "STATE," + door + "," + temp + "," + hum;
+
+    sendResponse(c, "200 OK", "text/plain", csv);
+  }
+
+  // -----------------------------
+  //  📌 명령 요청 (/cmd?...)
+  // -----------------------------
+  else if (path.startsWith("/cmd")) {
+   
+    if (path.indexOf("buzzer=off") != -1) {
+      arduino.write("BUZZER_OFF\n");
+      println("명령 전송 → BUZZER_OFF");
+    }
+
+    if (path.indexOf("led=1") != -1) {
+      arduino.write("LED_ON\n");
+      println("명령 전송 → LED_ON");
+    }
+
+    if (path.indexOf("led=0") != -1) {
+      arduino.write("LED_OFF\n");
+      println("명령 전송 → LED_OFF");
+    }
+
+    sendResponse(c, "200 OK", "text/plain", "OK");
+  }
+
+  // -----------------------------
+  //  📌 없는 요청
+  // -----------------------------
+  else {
+    sendResponse(c, "404 Not Found", "text/plain", "Not Found");
+  }
+
+  c.stop();
+}
+
+// ---------------------
+//  HTTP 응답 함수
+// ---------------------
+void sendResponse(Client c, String status, String type, String body) {
+  String header =
+    "HTTP/1.1 " + status + "\r\n" +
+    "Content-Type: " + type + "\r\n" +
+    "Access-Control-Allow-Origin: *\r\n" +
+    "Connection: close\r\n\r\n";
+
+  c.write(header + body);
+}
