@@ -1,0 +1,184 @@
+#include <DHT.h>
+
+// --------------------
+// 핀 설정
+// --------------------
+#define DHTPIN   2
+#define DHTTYPE  DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+#define TRIG_PIN    9
+#define ECHO_PIN    10
+
+#define LED_PIN     3      // 앱에서 ON/OFF 할 LED
+#define BUZZER_PIN  5       // 문 오래 열려있을 때 울리는 부저
+
+// --------------------
+// 문 열림 / 부저 관련 설정
+// --------------------
+const int DOOR_THRESHOLD = 10;            // 10cm 이상이면 문 열림으로 판단
+const unsigned long ALERT_TIME = 1000;   // 30초 이상 열려 있으면 부저 울림
+
+bool isDoorOpen = false;
+unsigned long doorOpenStart = 0;
+bool buzzerOn = false;
+
+// --------------------
+// 상태 전송 주기
+// --------------------
+const unsigned long STATUS_INTERVAL = 1000; // 1초마다 상태 전송
+unsigned long lastStatusTime = 0;
+
+// 온습도 캐시(전송용)
+float lastTemp = 0;
+float lastHum  = 0;
+
+// --------------------
+// 초음파 거리 측정 함수 (cm)
+// --------------------
+long getDistanceCm() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 타임아웃 30ms
+  if (duration == 0) return 999; // 타임아웃 시 먼 거리로 처리
+
+  long distance = duration * 0.034 / 2;
+  return distance;
+}
+
+// --------------------
+// Setup
+// --------------------
+void setup() {
+  Serial.begin(9600);
+
+  dht.begin();
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+// --------------------
+// Loop
+// --------------------
+void loop() {
+  // 1) 문 상태 업데이트
+  updateDoorState();
+
+  // 2) 문이 오래 열려 있으면 부저 처리
+  handleDoorAlarm();
+
+  // 3) Processing에서 오는 시리얼 명령 처리
+  handleSerialCommand();
+
+  // 4) 일정 주기마다 온습도 읽고 상태 전송
+  sendStatusIfNeeded();
+}
+
+// --------------------
+// 문 상태 업데이트
+// --------------------
+void updateDoorState() {
+  long distance = getDistanceCm();
+  bool nowOpen = (distance > DOOR_THRESHOLD);
+
+  static bool prevOpen = false;
+
+  if (nowOpen != prevOpen) {
+    // 상태 전환 발생
+    if (nowOpen) {
+      // 문이 방금 열렸을 때
+      doorOpenStart = millis();
+      // 문 열리면 LED 자동으로 켜고 싶으면 아래 줄 사용
+      // digitalWrite(LED_PIN, HIGH);
+    } else {
+      // 문이 방금 닫혔을 때
+      buzzerOn = false;
+      digitalWrite(BUZZER_PIN, LOW);
+      // 문 닫히면 LED 자동으로 끄고 싶으면 아래 줄 사용
+      // digitalWrite(LED_PIN, LOW);
+    }
+  }
+
+  isDoorOpen = nowOpen;
+  prevOpen = nowOpen;
+}
+
+// --------------------
+// 문 오래 열려 있으면 부저 울림
+// --------------------
+void handleDoorAlarm() {
+  if (!isDoorOpen) return;
+
+  unsigned long now = millis();
+  if (now - doorOpenStart >= ALERT_TIME) {
+    // 30초 이상 열려 있으면 부저 ON
+    if (!buzzerOn) {
+      buzzerOn = true;
+      digitalWrite(BUZZER_PIN, HIGH);
+    }
+  }
+}
+
+// --------------------
+// Processing에서 오는 명령 처리
+//   - "LED_ON"
+//   - "LED_OFF"
+//   - "BUZZER_OFF"
+// --------------------
+void handleSerialCommand() {
+  while (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();  // 공백/개행 제거
+
+    if (cmd.length() == 0) return;
+
+    if (cmd == "LED_ON") {
+      digitalWrite(LED_PIN, HIGH);
+    } 
+    else if (cmd == "LED_OFF") {
+      digitalWrite(LED_PIN, LOW);
+    } 
+    else if (cmd == "BUZZER_OFF") {
+      buzzerOn = false;
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+  }
+}
+
+// --------------------
+// 상태 전송 (1초마다)
+//   형식: STATE,door,temp,hum
+//   예시: STATE,1,4.20,60.5
+// --------------------
+void sendStatusIfNeeded() {
+  unsigned long now = millis();
+  if (now - lastStatusTime < STATUS_INTERVAL) return;
+  lastStatusTime = now;
+
+  // 온습도 읽기 (DHT11은 1초 주기 정도 권장)
+  float t = dht.readTemperature(); // 섭씨
+  float h = dht.readHumidity();
+
+  // 센서 읽기 실패 시 이전 값 유지
+  if (!isnan(t)) lastTemp = t;
+  if (!isnan(h)) lastHum  = h;
+
+  Serial.print("STATE,");
+  Serial.print(isDoorOpen ? 1 : 0);
+  Serial.print(",");
+  Serial.print(lastTemp);
+  Serial.print(",");
+  Serial.println(lastHum);
+}
